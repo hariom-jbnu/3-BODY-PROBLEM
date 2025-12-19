@@ -13,9 +13,9 @@ This repo includes:
 
 These plots are generated offline (Python) just to document what the equations do.
 
-![Three-body trajectories](docs/images/trajectory.png)
+![Three-body trajectories](docs/images/trajectory.gif)
 ![Energy over time](docs/images/energy.png)
-![Body #3 trail-style path](docs/images/trail_body3.png)
+![Body #3 trail-style path](docs/images/trail_style_path.jpg)
 
 ## How to run
 
