@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>3-Body Problem (Newtonian Gravity) — Controls + Auto Reset</title>
+  <style>
+    html, body { height: 100%; margin: 0; background:#05060a; overflow:hidden; }
+    canvas { display:block; width:100vw; height:100vh; }
+
+    .hud{
+      position:fixed; left:12px; top:12px;
+      font: 13px/1.35 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color:#d7dcff; background: rgba(10,12,18,.58);
+      border: 1px solid rgba(140,160,255,.18);
+      border-radius: 12px; padding: 10px 12px; backdrop-filter: blur(6px);
+      user-select:none; max-width: 440px;
+    }
+
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+    .grid { display:grid; grid-template-columns: 1fr; gap:8px; margin-top:10px; }
+
+    button{
+      background:#12162a; color:#d7dcff; border:1px solid rgba(140,160,255,.25);
+      border-radius: 10px; padding: 7px 10px; cursor:pointer;
+    }
+    button:hover { border-color: rgba(140,160,255,.45); }
+
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; opacity:.95; }
+    .dim{ opacity:.85; }
+
+    .control{
+      display:grid;
+      grid-template-columns: 160px 1fr 70px;
+      align-items:center;
+      gap:10px;
+    }
+    .control label { opacity:.9; }
+    input[type="range"] { width: 100%; }
+    .val { text-align:right; font-variant-numeric: tabular-nums; opacity:.95; }
+
+    details { margin-top: 10px; }
+    summary { cursor:pointer; }
+    .hint { margin-top: 8px; opacity:.82; }
+
+    .checkRow{
+      display:flex; align-items:center; gap:10px;
+      margin-top: 8px;
+    }
+    .checkRow input { transform: translateY(1px); }
+  </style>
+</head>
+<body>
+  <canvas id="sim"></canvas>
+
+  <div class="hud">
+    <div><strong>3-body Newtonian gravity</strong> <span class="dim">(chaotic, continuous)</span></div>
+    <div class="mono" id="stats"></div>
+
+    <div class="row">
+      <button id="toggle">Pause</button>
+      <button id="reset">Reset</button>
+      <button id="random">Randomize (chaotic)</button>
+      <button id="clearTrail">Clear trail</button>
+    </div>
+
+    <details open>
+      <summary>Settings</summary>
+      <div class="grid">
+        <div class="control">
+          <label for="speed">Speed (time scale)</label>
+          <input id="speed" type="range" min="0.05" max="2.5" step="0.01" value="1.00" />
+          <div class="val mono" id="speedVal">1.00x</div>
+        </div>
+
+        <div class="control">
+          <label for="g">Gravity (G)</label>
+          <input id="g" type="range" min="0.20" max="3.00" step="0.01" value="1.00" />
+          <div class="val mono" id="gVal">1.00</div>
+        </div>
+
+        <div class="control">
+          <label for="soft">Softening</label>
+          <input id="soft" type="range" min="0.00" max="0.25" step="0.005" value="0.03" />
+          <div class="val mono" id="softVal">0.030</div>
+        </div>
+
+        <div class="control">
+          <label for="sub">Stability (substeps)</label>
+          <input id="sub" type="range" min="1" max="14" step="1" value="6" />
+          <div class="val mono" id="subVal">6</div>
+        </div>
+
+        <div class="control">
+          <label for="trailLen">Trail length</label>
+          <input id="trailLen" type="range" min="200" max="6000" step="50" value="2200" />
+          <div class="val mono" id="trailLenVal">2200</div>
+        </div>
+
+        <div class="control">
+          <label for="trailAlpha">Trail brightness</label>
+          <input id="trailAlpha" type="range" min="0.10" max="1.20" step="0.01" value="0.90" />
+          <div class="val mono" id="trailAlphaVal">0.90</div>
+        </div>
+
+        <div class="checkRow">
+          <label><input id="autoReset" type="checkbox" checked /> Auto-reset if offscreen</label>
+        </div>
+
+        <div class="control">
+          <label for="resetMargin">Offscreen margin (px)</label>
+          <input id="resetMargin" type="range" min="0" max="600" step="10" value="140" />
+          <div class="val mono" id="resetMarginVal">140</div>
+        </div>
+      </div>
+
+      <div class="hint">
+        Speed slows time without changing gravity. Substeps improves stability.
+        Auto-reset triggers when any body leaves the screen beyond the margin.
+      </div>
+    </details>
+
+    <div class="dim" style="margin-top:8px;">
+      Trail is drawn only for the <strong>third</strong> body (the “last one”), fading with age.
+      Scroll wheel zooms.
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("sim");
+    const ctx = canvas.getContext("2d", { alpha: true });
+
+    let viewW = 0, viewH = 0;
+
+    // Must exist before resize() is called (fixes the earlier blank-canvas bug)
+    let scale = 200;
+
+    function resize() {
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      canvas.width  = Math.floor(window.innerWidth * dpr);
+      canvas.height = Math.floor(window.innerHeight * dpr);
+      canvas.style.width = window.innerWidth + "px";
+      canvas.style.height = window.innerHeight + "px";
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      viewW = canvas.width / dpr;
+      viewH = canvas.height / dpr;
+
+      scale = Math.min(viewW, viewH) * 0.22;
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    const params = {
+      G: 1.0,
+      dtBase: 0.008,
+      timeScale: 1.0,
+      subSteps: 6,
+      softening: 0.03,
+      maxTrail: 2200,
+      trailGain: 0.90,
+
+      autoReset: true,
+      resetMarginPx: 140
+    };
+
+    function worldToScreen(x, y) {
+      return { x: viewW * 0.5 + x * scale, y: viewH * 0.5 + y * scale };
+    }
+
+    function makeBody(x, y, vx, vy, m, color) {
+      return { x, y, vx, vy, ax: 0, ay: 0, m, color };
+    }
+
+    function zeroTotalMomentum(bodies) {
+      let px = 0, py = 0, msum = 0;
+      for (const b of bodies) { px += b.m * b.vx; py += b.m * b.vy; msum += b.m; }
+      const cx = px / msum, cy = py / msum;
+      for (const b of bodies) { b.vx -= cx; b.vy -= cy; }
+    }
+
+    function recenterCOM(bodies) {
+      let x = 0, y = 0, msum = 0;
+      for (const b of bodies) { x += b.m * b.x; y += b.m * b.y; msum += b.m; }
+      x /= msum; y /= msum;
+      for (const b of bodies) { b.x -= x; b.y -= y; }
+    }
+
+    function initialBodies() {
+      const b0 = makeBody(-0.9,  0.2,  0.00, -0.35, 1.2, "#9ad6ff");
+      const b1 = makeBody( 0.7, -0.1,  0.12,  0.28, 1.0, "#ffd18b");
+      const b2 = makeBody( 0.1,  0.7, -0.18,  0.05, 0.9, "#ff9ab5"); // last body => trail
+      const bodies = [b0, b1, b2];
+      zeroTotalMomentum(bodies);
+      recenterCOM(bodies);
+      return bodies;
+    }
+
+    function randomChaoticBodies() {
+      const rnd = (a,b)=> a + Math.random()*(b-a);
+      const masses = [rnd(0.8,1.5), rnd(0.8,1.5), rnd(0.8,1.5)];
+      const bodies = [
+        makeBody(rnd(-1,1), rnd(-1,1), rnd(-0.5,0.5), rnd(-0.5,0.5), masses[0], "#9ad6ff"),
+        makeBody(rnd(-1,1), rnd(-1,1), rnd(-0.5,0.5), rnd(-0.5,0.5), masses[1], "#ffd18b"),
+        makeBody(rnd(-1,1), rnd(-1,1), rnd(-0.5,0.5), rnd(-0.5,0.5), masses[2], "#ff9ab5"),
+      ];
+      for (const b of bodies) { b.vx *= 0.45; b.vy *= 0.45; }
+      zeroTotalMomentum(bodies);
+      recenterCOM(bodies);
+      return bodies;
+    }
+
+    // Track what "kind" of reset you last chose; auto-reset repeats it.
+    let resetMode = "initial"; // "initial" | "random"
+
+    let bodies = initialBodies();
+
+    const trail = [];
+    let storeCounter = 0;
+    let t = 0;
+    let running = true;
+
+    function resetSystem(mode = resetMode) {
+      bodies = (mode === "random") ? randomChaoticBodies() : initialBodies();
+      trail.length = 0;
+      storeCounter = 0;
+      t = 0;
+    }
+
+    // Offscreen detection (in screen pixels + margin)
+    function anyBodyOffscreen(bs) {
+      const m = params.resetMarginPx;
+      for (const b of bs) {
+        const p = worldToScreen(b.x, b.y);
+        if (p.x < -m || p.x > viewW + m || p.y < -m || p.y > viewH + m) return true;
+      }
+      return false;
+    }
+
+    function computeAccelerations(bs) {
+      const soft2 = params.softening * params.softening;
+      for (const b of bs) { b.ax = 0; b.ay = 0; }
+
+      for (let i = 0; i < bs.length; i++) {
+        for (let j = i + 1; j < bs.length; j++) {
+          const a = bs[i], b = bs[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const r2 = dx*dx + dy*dy + soft2;
+          const invR = 1 / Math.sqrt(r2);
+          const invR3 = invR * invR * invR;
+
+          const f = params.G * invR3;
+
+          a.ax += f * b.m * dx;
+          a.ay += f * b.m * dy;
+
+          b.ax -= f * a.m * dx;
+          b.ay -= f * a.m * dy;
+        }
+      }
+    }
+
+    // Velocity Verlet
+    function step(bs, h) {
+      computeAccelerations(bs);
+
+      for (const b of bs) {
+        b.vx += 0.5 * b.ax * h;
+        b.vy += 0.5 * b.ay * h;
+      }
+
+      for (const b of bs) {
+        b.x += b.vx * h;
+        b.y += b.vy * h;
+      }
+
+      computeAccelerations(bs);
+
+      for (const b of bs) {
+        b.vx += 0.5 * b.ax * h;
+        b.vy += 0.5 * b.ay * h;
+      }
+    }
+
+    function energy(bs) {
+      const soft2 = params.softening * params.softening;
+      let K = 0, U = 0;
+      for (const b of bs) K += 0.5 * b.m * (b.vx*b.vx + b.vy*b.vy);
+      for (let i=0;i<bs.length;i++){
+        for (let j=i+1;j<bs.length;j++){
+          const a=bs[i], b=bs[j];
+          const dx=b.x-a.x, dy=b.y-a.y;
+          const r = Math.sqrt(dx*dx+dy*dy + soft2);
+          U += -params.G * a.m * b.m / r;
+        }
+      }
+      return { E: K+U };
+    }
+
+    function clear() {
+      ctx.clearRect(0, 0, viewW, viewH);
+      ctx.fillStyle = "rgba(0,0,0,0.14)";
+      ctx.fillRect(0, 0, viewW, viewH);
+    }
+
+    function drawTrail() {
+      if (trail.length < 2) return;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+
+      for (let i = 1; i < trail.length; i++) {
+        const p0 = trail[i-1];
+        const p1 = trail[i];
+        const age = i / trail.length;
+        const alpha = Math.pow(age, 2.2) * params.trailGain;
+        ctx.strokeStyle = `rgba(255,154,181,${alpha})`;
+        ctx.beginPath();
+        ctx.moveTo(p0.sx, p0.sy);
+        ctx.lineTo(p1.sx, p1.sy);
+        ctx.stroke();
+      }
+    }
+
+    function drawBodies(bs) {
+      for (const b of bs) {
+        const p = worldToScreen(b.x, b.y);
+        const r = 6 + 5*Math.sqrt(b.m);
+
+        ctx.beginPath();
+        ctx.fillStyle = b.color;
+        ctx.shadowBlur = 14;
+        ctx.shadowColor = b.color;
+        ctx.arc(p.x, p.y, r, 0, Math.PI*2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        ctx.beginPath();
+        ctx.fillStyle = "rgba(255,255,255,0.75)";
+        ctx.arc(p.x, p.y, Math.max(2.2, r*0.26), 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    const statsEl = document.getElementById("stats");
+
+    function tick() {
+      if (running) {
+        const h = Math.min(params.dtBase * params.timeScale, 0.03);
+
+        for (let s=0; s<params.subSteps; s++) {
+          step(bodies, h);
+          t += h;
+
+          // record trail for the last body only
+          const last = bodies[bodies.length - 1];
+          const sp = worldToScreen(last.x, last.y);
+          trail.push({ sx: sp.x, sy: sp.y });
+          if (trail.length > params.maxTrail) trail.shift();
+
+          // Auto-reset check after stepping
+          if (params.autoReset && anyBodyOffscreen(bodies)) {
+            resetSystem(resetMode);
+            break;
+          }
+        }
+      }
+
+      clear();
+      drawTrail();
+      drawBodies(bodies);
+
+      const e = energy(bodies);
+      statsEl.textContent =
+        `t=${t.toFixed(2)}  speed=${params.timeScale.toFixed(2)}x  ` +
+        `G=${params.G.toFixed(2)}  soft=${params.softening.toFixed(3)}  ` +
+        `sub=${params.subSteps}  margin=${params.resetMarginPx}px  E=${e.E.toFixed(4)}`;
+
+      requestAnimationFrame(tick);
+    }
+    tick();
+
+    // Buttons
+    document.getElementById("toggle").addEventListener("click", () => {
+      running = !running;
+      document.getElementById("toggle").textContent = running ? "Pause" : "Play";
+    });
+
+    document.getElementById("reset").addEventListener("click", () => {
+      resetMode = "initial";
+      resetSystem("initial");
+    });
+
+    document.getElementById("random").addEventListener("click", () => {
+      resetMode = "random";
+      resetSystem("random");
+    });
+
+    document.getElementById("clearTrail").addEventListener("click", () => {
+      trail.length = 0;
+    });
+
+    // Wheel zoom
+    window.addEventListener("wheel", (ev) => {
+      const k = ev.deltaY > 0 ? 0.92 : 1.08;
+      scale *= k;
+      scale = Math.max(40, Math.min(scale, 1200));
+    }, { passive: true });
+
+    // Slider wiring
+    const el = (id) => document.getElementById(id);
+
+    function bindRange(id, onChange) {
+      const input = el(id);
+      input.addEventListener("input", () => onChange(input.value));
+      onChange(input.value);
+    }
+
+    bindRange("speed", (v) => {
+      params.timeScale = parseFloat(v);
+      el("speedVal").textContent = `${params.timeScale.toFixed(2)}x`;
+    });
+
+    bindRange("g", (v) => {
+      params.G = parseFloat(v);
+      el("gVal").textContent = params.G.toFixed(2);
+    });
+
+    bindRange("soft", (v) => {
+      params.softening = parseFloat(v);
+      el("softVal").textContent = params.softening.toFixed(3);
+    });
+
+    bindRange("sub", (v) => {
+      params.subSteps = Math.max(1, Math.floor(parseFloat(v)));
+      el("subVal").textContent = String(params.subSteps);
+    });
+
+    bindRange("trailLen", (v) => {
+      params.maxTrail = Math.max(50, Math.floor(parseFloat(v)));
+      el("trailLenVal").textContent = String(params.maxTrail);
+      while (trail.length > params.maxTrail) trail.shift();
+    });
+
+    bindRange("trailAlpha", (v) => {
+      params.trailGain = parseFloat(v);
+      el("trailAlphaVal").textContent = params.trailGain.toFixed(2);
+    });
+
+    // Auto-reset checkbox + margin
+    el("autoReset").addEventListener("change", (e) => {
+      params.autoReset = e.target.checked;
+    });
+
+    bindRange("resetMargin", (v) => {
+      params.resetMarginPx = Math.max(0, Math.floor(parseFloat(v)));
+      el("resetMarginVal").textContent = String(params.resetMarginPx);
+    });
+  </script>
+</body>
+</html>
