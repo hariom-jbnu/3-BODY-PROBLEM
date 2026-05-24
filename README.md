@@ -14,9 +14,17 @@ Interactive **3-body gravity simulation** built with plain **HTML/CSS/JS** using
 - Auto-reset when bodies leave screen
 
 ## Preview
-- Trajectories: [trajectory.gif](docs/images/trajectory.gif)
-- Energy graph: [energy.png](docs/images/energy.png)
-- Trail style: [trail_style_path.jpg](docs/images/trail_style_path.jpg)
+
+### Trajectories
+![Three-body trajectories](docs/images/trajectory.gif)
+
+### Energy Graph
+![Energy over time](docs/images/energy.png)
+
+### Trail Style
+![Trail-style path](docs/images/trail_style_path.jpg)
+
+---
 
 ## Run
 1. Save as `index.html`
@@ -48,16 +56,16 @@ No frameworks or build tools.
 ### Newtonian Gravity
 Each body attracts others:
 
-:contentReference[oaicite:0]{index=0}
+![Newtons's Law of Gravitation](https://www.sphere-magazine.com/Gravity/Newton1.jpg)
 
 - Force acts along connecting line
 - Pairwise updates preserve Newton’s third law
 
 ### Softening
 To avoid infinite acceleration at very small distances:
-
+```
 :contentReference[oaicite:1]{index=1}
-
+```
 Improves numerical stability.
 
 ## Numerical Integration
